@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Side-Camera Virtual Keyboard & Trackpad</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <style>
+    body { font-family: -apple-system, sans-serif; text-align: center; background: #000; color: #fff; margin: 0; padding: 10px; }
+    #output { width: 90%; height: 60px; font-size: 22px; margin: 10px auto; border-radius: 8px; padding: 10px; background: #1c1c1e; color: #fff; border: 1px solid #333; }
+    canvas { width: 100%; max-width: 900px; border-radius: 12px; background: #111; }
+    video { display: none; }
+  </style>
+</head>
+<body>
+
+  <h2>Side Camera Keyboard & MacBook Trackpad</h2>
+  <textarea id="output" placeholder="Typed text appears here..."></textarea>
+  <br>
+  <canvas id="canvas" width="1280" height="720"></canvas>
+  <video id="webcam" playsinline></video>
+
+<script>
+const videoElement = document.getElementById('webcam');
+const canvasElement = document.getElementById('canvas');
+const canvasCtx = canvasElement.getContext('2d');
+const outputText = document.getElementById('output');
+
+// MacBook Style Virtual Trackpad State
+let trackpadActive = false;
+let cursor = { x: 640, y: 360 };
+let prevIndexPos = null;
+
+const keys = [
+  ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+  ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+  ["Z", "X", "C", "V", "B", "N", "M"]
+];
+
+let cooldown = false;
+
+function processFrame(indexPoint, thumbPoint, middlePoint) {
+  // Clear Frame
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+  // --- 1. KEYBOARD ZONE (Top Half) ---
+  let startX = 100, startY = 60, keyW = 95, keyH = 80, gap = 12;
+
+  keys.forEach((row, rIdx) => {
+    let rowOffsetX = startX + (rIdx * 30);
+    row.forEach((key, cIdx) => {
+      let x = rowOffsetX + cIdx * (keyW + gap);
+      let y = startY + rIdx * (keyH + gap);
+
+      let isHover = indexPoint && indexPoint.x > x && indexPoint.x < x + keyW && indexPoint.y > y && indexPoint.y < y + keyH;
+      let dist = (indexPoint && thumbPoint) ? Math.hypot(indexPoint.x - thumbPoint.x, indexPoint.y - thumbPoint.y) : 999;
+      let isPinch = isHover && dist < 40;
+
+      if (isPinch && !cooldown) {
+        outputText.value += key;
+        cooldown = true;
+        setTimeout(() => cooldown = false, 300);
+      }
+
+      canvasCtx.fillStyle = isPinch ? "#34C759" : (isHover ? "rgba(52, 199, 89, 0.3)" : "rgba(255, 255, 255, 0.15)");
+      canvasCtx.beginPath();
+      canvasCtx.roundRect(x, y, keyW, keyH, 8);
+      canvasCtx.fill();
+
+      canvasCtx.fillStyle = isPinch ? "#000" : "#FFF";
+      canvasCtx.font = "bold 28px -apple-system";
+      canvasCtx.fillText(key, x + (keyW / 2) - 10, y + (keyH / 2) + 10);
+    });
+  });
+
+  // --- 2. MACBOOK TRACKPAD ZONE (Bottom Half) ---
+  let tpX = 100, tpY = 380, tpW = 1080, tpH = 300;
+  canvasCtx.strokeStyle = "#0A84FF";
+  canvasCtx.lineWidth = 2;
+  canvasCtx.strokeRect(tpX, tpY, tpW, tpH);
+  canvasCtx.fillStyle = "rgba(10, 132, 255, 0.08)";
+  canvasCtx.fillRect(tpX, tpY, tpW, tpH);
+  
+  canvasCtx.fillStyle = "#8E8E93";
+  canvasCtx.font = "16px -apple-system";
+  canvasCtx.fillText("MacBook Trackpad Zone (Glide finger to move cursor, 2-finger pinch/tap to click)", tpX + 15, tpY + 25);
+
+  // --- 3. TRACKPAD CURSOR MOVEMENT LOGIC ---
+  if (indexPoint && indexPoint.x > tpX && indexPoint.x < tpX + tpW && indexPoint.y > tpY && indexPoint.y < tpY + tpH) {
+    if (prevIndexPos) {
+      // Relative delta movement like a real trackpad
+      let dx = (indexPoint.x - prevIndexPos.x) * 1.5;
+      let dy = (indexPoint.y - prevIndexPos.y) * 1.5;
+
+      cursor.x = Math.max(tpX, Math.min(tpX + tpW, cursor.x + dx));
+      cursor.y = Math.max(tpY, Math.min(tpY + tpH, cursor.y + dy));
+    }
+    prevIndexPos = { x: indexPoint.x, y: indexPoint.y };
+
+    // Detect Click (Index + Thumb Pinch inside Trackpad)
+    let tpDist = thumbPoint ? Math.hypot(indexPoint.x - thumbPoint.x, indexPoint.y - thumbPoint.y) : 999;
+    let isClick = tpDist < 35;
+
+    // Draw Virtual Pointer Cursor
+    canvasCtx.beginPath();
+    canvasCtx.arc(cursor.x, cursor.y, isClick ? 8 : 12, 0, 2 * Math.PI);
+    canvasCtx.fillStyle = isClick ? "#FF9500" : "#0A84FF";
+    canvasCtx.fill();
+    canvasCtx.lineWidth = 2;
+    canvasCtx.strokeStyle = "#FFF";
+    canvasCtx.stroke();
+  } else {
+    prevIndexPos = null;
+  }
+}
+
+// Initialize MediaPipe Tracking
+const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+
+hands.onResults((results) => {
+  canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+  let indexPoint = null, thumbPoint = null;
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    let lm = results.multiHandLandmarks[0];
+    indexPoint = { x: lm[8].x * canvasElement.width, y: lm[8].y * canvasElement.height };
+    thumbPoint = { x: lm[4].x * canvasElement.width, y: lm[4].y * canvasElement.height };
+  }
+  processFrame(indexPoint, thumbPoint);
+});
+
+const camera = new Camera(videoElement, {
+  onFrame: async () => { await hands.send({ image: videoElement }); },
+  width: 1280, height: 720
+});
+camera.start();
+</script>
+</body>
+</html>
